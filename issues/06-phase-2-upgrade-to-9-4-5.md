@@ -1,8 +1,8 @@
-# 05: 执行大版本跳跃：从 8.latest 滚动升级至 9.4.5
+# 06: Phase 2 - 跨越升级：从 8.latest 滚动升级至 9.4.5
 
 **What to build:** Elasticsearch 4 节点与 Kibana 完全运行在 9.4.5，数据正常读写，外部客户端流量无感连接。
 
-**Blocked by:** 04: 将 ES 与 Kibana 滚动升级至 8.x 最终稳定版本
+**Blocked by:** 05
 
 **Status:** ready-for-agent
 

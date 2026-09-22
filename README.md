@@ -6,35 +6,34 @@
 
 ## Solution
 
-采用“前置排查 + 两步走滚动升级”的策略，放弃高资源消耗的蓝绿部署，在现有 OpenShift 资源上通过原生的 StatefulSet 进行就地滚动升级（In-place Rolling Upgrade）。外围组件（Logstash）延后升级以保证数据不中断。
+采用“前置排查 + 全栈两步走滚动升级”的策略，放弃高资源消耗的蓝绿部署，在现有 OpenShift 资源上通过原生的 StatefulSet 进行就地滚动升级（In-place Rolling Upgrade）。外围组件（Logstash）需先与核心同步升级至 8.latest，以保证大版本跨越期间数据不中断。
 
 ## Operations / User Stories
 
 1. 作为平台工程师，我需要先将集群从 8.12.2 升级到 8.x 的最后一个稳定版本，以便在进入 9.x 之前完成所有内部元数据的自动对齐与转换。
 2. 作为业务研发，我需要一份基于 Upgrade Assistant 的准确报告，以便在升级前修改我的 8.x 客户端配置（添加 `compatible-with=8` 请求头）或修复废弃 API 调用。
-3. 作为运维人员，我需要一套安全的手动驱逐和重启脚本，以便在没有 ECK Operator 的情况下，通过控制 StatefulSet 逐个重启 4 个 ES 节点而不丢失分片。
-4. 作为系统管理员，我希望即使遇到最极端的 9.4.5 启动失败，我也能通过快照机制执行回滚，以保证数据的最终安全性。
-5. 作为日志平台的消费者，我希望在核心 ES 升级期间，外围的 Logstash 依然能利用向下兼容性继续发送数据，从而保证日志管道不产生断流。
+3. 作为系统管理员，我需要在核心集群升至 9.x 之前，将所有 Logstash 提升到 8.latest，确保它们能合法地向 9.x ES 发送数据，不产生断流。
+4. 作为运维人员，我需要一套安全的手动驱逐和重启脚本，以便在没有 ECK Operator 的情况下，通过控制 StatefulSet 逐个重启 4 个 ES 节点而不丢失分片。
+5. 作为日志平台的消费者，我希望即使遇到最极端的 9.4.5 启动失败，我也能通过快照机制执行回滚，以保证数据的最终安全性。
 
 ## Implementation Decisions
 
 以下是我们在架构访谈中达成的关键决策，作为整个升级计划的 Single Source of Truth：
 
-- **升级路径 (Upgrade Path)**:
-  - Phase 1: `8.12.2` -> `8.latest` (例如 8.17.x)
-  - Phase 2: `8.latest` -> `9.4.5`
+- **升级路径 (Upgrade Path) - 三步走**:
+  - Phase 1: 核心集群 `8.12.2` -> `8.latest` (例如 8.17.x)
+  - Phase 1.5: 所有 Logstash 实例 `8.12.2` -> `8.latest`
+  - Phase 2: 核心集群 `8.latest` -> `9.4.5`
+  - Phase 3: 所有 Logstash 实例 `8.latest` -> `9.4.5`
 - **节点运维控制 (Node Orchestration)**:
   - 编排工具：OpenShift 原生 StatefulSet。
-  - 操作逻辑：对于每一个 ES Pod，执行以下循环：暂停分片自动分配 (`cluster.routing.allocation.enable=primaries`) -> 执行 Flush 同步刷盘 -> 隔离并修改该 Pod 镜像 Tag -> 启动加入集群 -> 恢复分片分配 (`all`) -> 等待 `_cluster/health` 变为 green。
+  - 操作逻辑：对于每一个 ES Pod，执行以下循环：暂停分片自动分配 -> 执行 Flush 同步刷盘 -> 隔离并修改该 Pod 镜像 Tag -> 启动加入集群 -> 恢复分片分配 -> 等待 `_cluster/health` 变为 green。
 - **客户端兼容性管控 (Client Compatibility Gate)**:
   - **强制前置条件**：必须在 Kibana Upgrade Assistant 中清除所有 Error 和 Warning 级别的不兼容调用。
   - **兼容性降维**：要求直连的 8.x 客户端在 HTTP 客户端层面强制注入请求头 `Accept: application/vnd.elasticsearch+json;compatible-with=8`。
 - **回滚底线策略 (Rollback Plan)**:
   - 升级前触发一次全局的 S3/NFS Snapshot。
   - 发生灾难时的回滚路径：停止所有流量直连 -> 缩容所有 ES 节点至 0 -> 删除/清空全部现存 PV (Persistent Volume) 数据 -> 重新以 8.12.2 镜像扩容 -> 调用 Restore API 从最后快照恢复数据。
-- **Logstash 管道时序 (Logstash Sequencing)**:
-  - ES 核心集群两步升级期间，所有的 Logstash (OpenShift & VPC) 保持 8.x 版本运行。
-  - ES 9.4.5 运行稳定后，择期分批滚动重启 Logstash 至 9.4.5。
 
 ## Testing Decisions (Seams)
 
@@ -47,8 +46,3 @@
 - **Seam 3: 兼容模式验证 (Staging Client Test)**
   - 验收标准：要求一个高频访问的 8.x 客户端在测试环境挂载 `compatible-with=8` 后，成功执行读写 9.x 集群的操作。
 
-## Out of Scope
-
-- Logstash 的内部 Filter/Grok 规则重构。
-- 扩容/缩容现有的 4 节点架构拓扑。
-- 修改 Elasticsearch 的 JVM 内存大小配置（保持现状）。

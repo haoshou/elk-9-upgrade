@@ -1,8 +1,8 @@
-# 07: 滚动重启并升级 VPC 上的 Logstash 实例至 9.4.5
+# 08: Phase 3 - 升级 VPC Logstash 至 9.4.5
 
 **What to build:** 解决跨 VPC 环境的节点代差，宣告整个 ELK 栈跨版本重构任务闭环。
 
-**Blocked by:** 05: 执行大版本跳跃：从 8.latest 滚动升级至 9.4.5
+**Blocked by:** 06
 
 **Status:** ready-for-agent
 
